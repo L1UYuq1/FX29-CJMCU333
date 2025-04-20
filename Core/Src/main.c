@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "adc.h"
+#include "dma.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -57,10 +58,12 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-char buffer[50];
-uint32_t adc_raw;
-float voltage;
-
+#define ADC_CHANNEL_COUNT 3
+uint16_t adc_dma_buffer[ADC_CHANNEL_COUNT];
+float voltage[ADC_CHANNEL_COUNT];
+float kg[ADC_CHANNEL_COUNT];
+float vref[ADC_CHANNEL_COUNT];
+char buffer[100];
 //串口打印
 void send_string(char *str) {
     HAL_UART_Transmit(&huart2, (uint8_t*)str, strlen(str), HAL_MAX_DELAY);
@@ -97,25 +100,31 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
+
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_dma_buffer, ADC_CHANNEL_COUNT);
+
+  // 建议加延时或第一次采样等待
+  HAL_Delay(100);
+
+  for (int j = 0; j < 10; j++) {
+      for (int i = 0; i < ADC_CHANNEL_COUNT; i++) {
+          vref[i] += ((float)adc_dma_buffer[i]) / 4095.0f * 3.3f;
+      }
+      HAL_Delay(50);
+  }
+
+  for (int i = 0; i < ADC_CHANNEL_COUNT; i++) {
+      vref[i] /= 10.0f;
+  }
+
+
   // 启动 ADC
     //HAL_ADC_Start(&hadc1);
 
-  // Vref
-  float sum = 0;
-  for (int i = 0; i < 100; i++) {
-  	            HAL_ADC_Start(&hadc1);
-  	            HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-  	            adc_raw = HAL_ADC_GetValue(&hadc1);
-
-  	            voltage = ((float)adc_raw) / 4095.0f * 3.417f;
-  	            sum += voltage;
-
-  	            HAL_Delay(1);  // 给 ADC 一点稳定时间，可选
-  	        }
-  float Vref = sum / 100.0f;
 
   /* USER CODE END 2 */
 
@@ -126,33 +135,46 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	        sum = 0;
 
 
 
-	  	  	HAL_ADC_Start(&hadc1);  // 每次都重启 ADC（保险）
-	    	HAL_ADC_PollForConversion(&hadc1,HAL_MAX_DELAY);
-	        adc_raw = HAL_ADC_GetValue(&hadc1);
+//	  	  	HAL_ADC_Start(&hadc1);  // 每次都重启 ADC（保险）
+//	    	HAL_ADC_PollForConversion(&hadc1,HAL_MAX_DELAY);
+//	        adc_raw = HAL_ADC_GetValue(&hadc1);
+//	       // HAL_ADC_Stop(&hadc1);
+//
+//
+//            voltage = (((float)adc_raw) / 4095.0f )* 3.38f - vref;
+//	        HAL_Delay(1);  // 给 ADC 一点稳定时间，可选
+//
+//
+//	        float kg =  voltage/2.0f * 45.36f*3.0f;
+//
+//
+//	        snprintf(buffer, sizeof(buffer), " Voltage = %.5f v   Poids = %.3f kg \r\n",voltage,kg);
+//	        send_string(buffer);
+//
+//	        HAL_Delay(500);  // 每秒2次，防止刷屏太快
 
-	        for (int i = 0; i < 100; i++) {
-	            HAL_ADC_Start(&hadc1);
-	            HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-	            adc_raw = HAL_ADC_GetValue(&hadc1);
-
-	            voltage = ((float)adc_raw) / 4095.0f * 3.417f;
-	            sum += voltage;
-
-	            HAL_Delay(1);  // 给 ADC 一点稳定时间，可选
-	        }
-
-	        float avg_voltage = sum / 100.0f;
-	        float g = 158.33*	(avg_voltage - Vref) / 0.00981;
 
 
-	        snprintf(buffer, sizeof(buffer), "Voltage AVG: %.3f V  Poids = %.3f g \r\n", avg_voltage,g);
-	        send_string(buffer);
+	      // 依次获取三个通道的值
+	  for (int i = 0; i < ADC_CHANNEL_COUNT; i++) {
+	          voltage[i] = ((float)adc_dma_buffer[i]) / 4095.0f * 3.3f;
+	          float weight = (voltage[i] - vref[i]) * 45.36f / 2.0f;
+	          //if (weight < 0) weight = 0;
+	          kg[i] = weight;
 
-	      HAL_Delay(500);  // 每秒2次，防止刷屏太快
+	          snprintf(buffer, sizeof(buffer), "V[%d]=%.3f V  Poids[%d]=%.3f kg\r\n", i, voltage[i]-vref[i], i, kg[i]);
+	          send_string(buffer);
+	      }
+
+	      float total = kg[0] + kg[1] + kg[2];
+	      snprintf(buffer, sizeof(buffer), "Poids total = %.3f kg\r\n\r\n", total);
+	      send_string(buffer);
+
+	      HAL_Delay(1000);
+
   }
   /* USER CODE END 3 */
 }
