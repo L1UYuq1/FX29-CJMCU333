@@ -58,12 +58,16 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define ADC_CHANNEL_COUNT 3
+#define ADC_CHANNEL_COUNT 6
 uint16_t adc_dma_buffer[ADC_CHANNEL_COUNT];
 float voltage[ADC_CHANNEL_COUNT];
-float kg[ADC_CHANNEL_COUNT];
+float kg1[3];
+float kg2[3];
 float vref[ADC_CHANNEL_COUNT];
 char buffer[100];
+
+float filter_alpha = 0.5; // 可以放到循环外
+static float filtered_voltage[ADC_CHANNEL_COUNT] = {0}; // 只需声明一次
 //串口打印
 void send_string(char *str) {
     HAL_UART_Transmit(&huart2, (uint8_t*)str, strlen(str), HAL_MAX_DELAY);
@@ -108,7 +112,7 @@ int main(void)
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_dma_buffer, ADC_CHANNEL_COUNT);
 
   // 建议加延时或第一次采样等待
-  HAL_Delay(100);
+  HAL_Delay(1000);
 
   for (int j = 0; j < 10; j++) {
       for (int i = 0; i < ADC_CHANNEL_COUNT; i++) {
@@ -159,22 +163,44 @@ int main(void)
 
 
 	      // 依次获取三个通道的值
-	  for (int i = 0; i < ADC_CHANNEL_COUNT; i++) {
-	          voltage[i] = ((float)adc_dma_buffer[i]) / 4095.0f * 3.3f;
-	          float weight = (voltage[i] - vref[i]) * 45.36f / 2.0f;
-	          //if (weight < 0) weight = 0;
-	          kg[i] = weight;
-
-	          snprintf(buffer, sizeof(buffer), "V[%d]=%.3f V  Poids[%d]=%.3f kg\r\n", i, voltage[i]-vref[i], i, kg[i]);
-	          send_string(buffer);
+	  // ★ 滑动平均滤波处理每路原始ADC数据
+	      for (int i = 0; i < ADC_CHANNEL_COUNT; i++) {
+	          float raw_v = ((float)adc_dma_buffer[i]) / 4095.0f * 3.3f;
+	          filtered_voltage[i] = filter_alpha * raw_v + (1.0f - filter_alpha) * filtered_voltage[i];
+	          voltage[i] = filtered_voltage[i];
 	      }
 
-	      float total = kg[0] + kg[1] + kg[2];
-	      snprintf(buffer, sizeof(buffer), "Poids total = %.3f kg\r\n\r\n", total);
+	      // ↓↓↓ 下面继续你原来的 vref 校准、kg 计算和串口输出 ↓↓↓
+	      for (int i = 0; i < 3; i++) {
+	          float weight1 = (voltage[i] - vref[i]) * 45.36f / 2.0f;
+	          float weight2 = (voltage[i+3] - vref[i+3]) * 45.36f / 2.0f;
+	          if (weight1 < 0) weight1 = 0;
+	          kg1[i] = weight1;
+	          if (weight2 < 0) weight2 = 0;
+			  kg2[i] = weight2;
+
+
+	      }
+
+	      for (int i = 0; i < 3; i++) {
+
+	      	          snprintf(buffer, sizeof(buffer), "V[%d]=%.3f V  Poids[%d]=%.3f kg\r\n", i, voltage[i]-vref[i], i, kg1[i]);
+	      	          send_string(buffer);
+	      	      }
+	      for (int i = 0; i < 3; i++) {
+
+	      	      	          snprintf(buffer, sizeof(buffer), "V[%d]=%.3f V  Poids[%d]=%.3f kg\r\n", i+3, voltage[i+3]-vref[i+3], i+3, kg2[i]);
+	      	      	          send_string(buffer);
+	      	      	      }
+
+	      float total1 = kg1[0] + kg1[1] + kg1[2];
+	      float total2 = kg2[0] + kg2[1] + kg2[2];
+	      snprintf(buffer, sizeof(buffer), "Poids total1 = %.3f kg\r\n\r\n", total1);
+	      send_string(buffer);
+	      snprintf(buffer, sizeof(buffer), "Poids total2 = %.3f kg\r\n\r\n", total2);
 	      send_string(buffer);
 
 	      HAL_Delay(1000);
-
   }
   /* USER CODE END 3 */
 }
